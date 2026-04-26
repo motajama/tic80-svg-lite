@@ -27,16 +27,15 @@ import math
 import re
 import sys
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 
-Number = float
 Command = Tuple
+Matrix = Tuple[float, float, float, float, float, float]
 
 
 TOKEN_RE = re.compile(
-    r"[AaCcHhLlMmQqVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
+    r"[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
 )
 
 
@@ -60,6 +59,179 @@ def fmt_number(value: float, decimals: int) -> str:
         return str(int(rounded))
     s = f"{rounded:.{decimals}f}".rstrip("0").rstrip(".")
     return s
+
+
+def parse_style_attr(style: str) -> dict:
+    out = {}
+    for part in (style or "").split(";"):
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def get_paint_attr(elem: ET.Element, name: str) -> Optional[str]:
+    if name in elem.attrib:
+        return elem.attrib[name]
+    style = elem.attrib.get("style")
+    if style:
+        return parse_style_attr(style).get(name)
+    return None
+
+
+def identity_matrix() -> Matrix:
+    return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def multiply_matrix(left: Matrix, right: Matrix) -> Matrix:
+    la, lb, lc, ld, le, lf = left
+    ra, rb, rc, rd, re, rf = right
+    return (
+        la * ra + lc * rb,
+        lb * ra + ld * rb,
+        la * rc + lc * rd,
+        lb * rc + ld * rd,
+        la * re + lc * rf + le,
+        lb * re + ld * rf + lf,
+    )
+
+
+def apply_matrix_point(matrix: Matrix, x: float, y: float) -> Tuple[float, float]:
+    a, b, c, d, e, f = matrix
+    return (a * x + c * y + e, b * x + d * y + f)
+
+
+def parse_transform(transform: Optional[str]) -> Matrix:
+    if not transform:
+        return identity_matrix()
+
+    result = identity_matrix()
+    for name, raw_args in re.findall(r"([A-Za-z]+)\s*\(([^)]*)\)", transform):
+        values = [
+            float(v)
+            for v in re.findall(
+                r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", raw_args
+            )
+        ]
+
+        if name == "matrix":
+            if len(values) != 6:
+                raise ValueError("matrix() transform requires 6 values")
+            op = tuple(values)
+        elif name == "translate":
+            if len(values) not in (1, 2):
+                raise ValueError("translate() transform requires 1 or 2 values")
+            tx = values[0]
+            ty = values[1] if len(values) == 2 else 0.0
+            op = (1.0, 0.0, 0.0, 1.0, tx, ty)
+        elif name == "scale":
+            if len(values) not in (1, 2):
+                raise ValueError("scale() transform requires 1 or 2 values")
+            sx = values[0]
+            sy = values[1] if len(values) == 2 else sx
+            op = (sx, 0.0, 0.0, sy, 0.0, 0.0)
+        elif name == "rotate":
+            if len(values) not in (1, 3):
+                raise ValueError("rotate() transform requires 1 or 3 values")
+            angle = math.radians(values[0])
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
+            rotate_only = (cos_a, sin_a, -sin_a, cos_a, 0.0, 0.0)
+            if len(values) == 3:
+                cx, cy = values[1], values[2]
+                op = multiply_matrix(
+                    multiply_matrix((1.0, 0.0, 0.0, 1.0, cx, cy), rotate_only),
+                    (1.0, 0.0, 0.0, 1.0, -cx, -cy),
+                )
+            else:
+                op = rotate_only
+        elif name == "skewX":
+            if len(values) != 1:
+                raise ValueError("skewX() transform requires 1 value")
+            op = (1.0, 0.0, math.tan(math.radians(values[0])), 1.0, 0.0, 0.0)
+        elif name == "skewY":
+            if len(values) != 1:
+                raise ValueError("skewY() transform requires 1 value")
+            op = (1.0, math.tan(math.radians(values[0])), 0.0, 1.0, 0.0, 0.0)
+        else:
+            raise NotImplementedError(f"Unsupported transform function: {name}")
+
+        result = multiply_matrix(result, op)
+
+    return result
+
+
+def is_identity_matrix(matrix: Matrix) -> bool:
+    return all(abs(a - b) < 1e-9 for a, b in zip(matrix, identity_matrix()))
+
+
+def is_axis_aligned_rect_matrix(matrix: Matrix) -> bool:
+    a, b, c, d, _, _ = matrix
+    return abs(b) < 1e-9 and abs(c) < 1e-9
+
+
+def is_uniform_circle_matrix(matrix: Matrix) -> bool:
+    a, b, c, d, _, _ = matrix
+    sx = math.hypot(a, b)
+    sy = math.hypot(c, d)
+    dot = a * c + b * d
+    return abs(sx - sy) < 1e-9 and abs(dot) < 1e-9
+
+
+def transform_commands(cmds: Sequence[Command], matrix: Matrix) -> List[Command]:
+    if is_identity_matrix(matrix):
+        return list(cmds)
+
+    out: List[Command] = []
+    for cmd in cmds:
+        op = cmd[0]
+        if op in ("m", "l"):
+            x, y = apply_matrix_point(matrix, cmd[1], cmd[2])
+            out.append((op, x, y))
+        elif op == "z":
+            out.append(cmd)
+        else:
+            raise NotImplementedError(f"Cannot transform command {op!r} directly")
+    return out
+
+
+def rect_as_path_commands(
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    matrix: Matrix,
+) -> List[Command]:
+    points = [
+        apply_matrix_point(matrix, x, y),
+        apply_matrix_point(matrix, x + w, y),
+        apply_matrix_point(matrix, x + w, y + h),
+        apply_matrix_point(matrix, x, y + h),
+    ]
+    cmds: List[Command] = [("m", points[0][0], points[0][1])]
+    cmds.extend(("l", px, py) for px, py in points[1:])
+    cmds.append(("z",))
+    return cmds
+
+
+def circle_as_path_commands(
+    cx: float,
+    cy: float,
+    r: float,
+    matrix: Matrix,
+    segments: int,
+) -> List[Command]:
+    points = []
+    for step in range(segments):
+        angle = (2 * math.pi * step) / segments
+        px = cx + math.cos(angle) * r
+        py = cy + math.sin(angle) * r
+        points.append(apply_matrix_point(matrix, px, py))
+    cmds: List[Command] = [("m", points[0][0], points[0][1])]
+    cmds.extend(("l", px, py) for px, py in points[1:])
+    cmds.append(("z",))
+    return cmds
 
 
 def parse_points(points: str) -> List[Tuple[float, float]]:
@@ -105,7 +277,6 @@ class PathParser:
         self.y = 0.0
         self.start_x = 0.0
         self.start_y = 0.0
-        self.last_cmd: Optional[str] = None
 
     def has_more(self) -> bool:
         return self.i < len(self.tokens)
@@ -114,7 +285,7 @@ class PathParser:
         return self.tokens[self.i] if self.has_more() else None
 
     def is_cmd(self, token: Optional[str]) -> bool:
-        return bool(token and re.fullmatch(r"[AaCcHhLlMmQqVvZz]", token))
+        return bool(token and re.fullmatch(r"[AaCcHhLlMmQqSsTtVvZz]", token))
 
     def read_num(self) -> float:
         if not self.has_more():
@@ -148,7 +319,6 @@ class PathParser:
             if cmd in ("Z", "z"):
                 self.commands.append(("z",))
                 self.x, self.y = self.start_x, self.start_y
-                self.last_cmd = cmd
                 cmd = None
                 continue
 
@@ -166,7 +336,6 @@ class PathParser:
                         first = False
                     else:
                         self.add_line(x, y)
-                self.last_cmd = cmd
                 continue
 
             if cmd in ("L", "l"):
@@ -177,7 +346,6 @@ class PathParser:
                         x += self.x
                         y += self.y
                     self.add_line(x, y)
-                self.last_cmd = cmd
                 continue
 
             if cmd in ("H", "h"):
@@ -186,7 +354,6 @@ class PathParser:
                     if cmd == "h":
                         x += self.x
                     self.add_line(x, self.y)
-                self.last_cmd = cmd
                 continue
 
             if cmd in ("V", "v"):
@@ -195,7 +362,6 @@ class PathParser:
                     if cmd == "v":
                         y += self.y
                     self.add_line(self.x, y)
-                self.last_cmd = cmd
                 continue
 
             if cmd in ("C", "c"):
@@ -215,7 +381,6 @@ class PathParser:
                         t = step / self.curve_segments
                         x, y = cubic_point(p0, p1, p2, p3, t)
                         self.add_line(x, y)
-                self.last_cmd = cmd
                 continue
 
             if cmd in ("Q", "q"):
@@ -232,11 +397,18 @@ class PathParser:
                         t = step / self.curve_segments
                         x, y = quad_point(p0, p1, p2, t)
                         self.add_line(x, y)
-                self.last_cmd = cmd
                 continue
 
+            if cmd in ("S", "s", "T", "t"):
+                raise NotImplementedError(
+                    f"SVG path command {cmd} is not supported."
+                )
+
             if cmd in ("A", "a"):
-                raise NotImplementedError("SVG arc commands A/a are not supported. Convert arcs to paths/lines in Inkscape first.")
+                raise NotImplementedError(
+                    "SVG arc commands A/a are not supported. Convert arcs to "
+                    "paths/lines in Inkscape first."
+                )
 
             raise ValueError(f"Unsupported path command: {cmd!r}")
 
@@ -277,20 +449,96 @@ def rect_commands(elem: ET.Element, rounded_segments: int = 4) -> List[Command]:
     return cmds
 
 
-def element_commands(elem: ET.Element, curve_segments: int) -> List[Command]:
+def element_commands(
+    elem: ET.Element, curve_segments: int, transform: Matrix
+) -> List[Command]:
     tag = strip_ns(elem.tag)
 
     if tag == "path":
-        return PathParser(elem.attrib.get("d", ""), curve_segments=curve_segments).parse()
+        cmds = PathParser(
+            elem.attrib.get("d", ""), curve_segments=curve_segments
+        ).parse()
+        return transform_commands(cmds, transform)
 
     if tag == "rect":
-        return rect_commands(elem)
+        x = num(elem.attrib.get("x"), 0)
+        y = num(elem.attrib.get("y"), 0)
+        w = num(elem.attrib.get("width"), 0)
+        h = num(elem.attrib.get("height"), 0)
+        rx = num(elem.attrib.get("rx"), 0)
+        ry = num(elem.attrib.get("ry"), rx)
+        fill = get_paint_attr(elem, "fill")
+        stroke = get_paint_attr(elem, "stroke")
+
+        if rx > 0 or ry > 0:
+            if fill is not None and fill.lower() != "none":
+                raise NotImplementedError(
+                    "Filled rounded rectangles are not supported."
+                )
+            return transform_commands(rect_commands(elem), transform)
+
+        if fill is None and stroke is None:
+            if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
+                x0, y0 = apply_matrix_point(transform, x, y)
+                x1, y1 = apply_matrix_point(transform, x + w, y + h)
+                return [("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))]
+            return rect_as_path_commands(x, y, w, h, transform)
+
+        cmds: List[Command] = []
+        if fill is not None and fill.lower() != "none":
+            if not (is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform)):
+                raise NotImplementedError(
+                    "Filled transformed rectangles are not supported unless the "
+                    "transform preserves axis alignment."
+                )
+            x0, y0 = apply_matrix_point(transform, x, y)
+            x1, y1 = apply_matrix_point(transform, x + w, y + h)
+            cmds.append(("b", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
+        if stroke is not None and stroke.lower() != "none":
+            if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
+                x0, y0 = apply_matrix_point(transform, x, y)
+                x1, y1 = apply_matrix_point(transform, x + w, y + h)
+                cmds.append(
+                    ("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+                )
+            else:
+                cmds.extend(rect_as_path_commands(x, y, w, h, transform))
+        return cmds
 
     if tag == "circle":
         cx = num(elem.attrib.get("cx"), 0)
         cy = num(elem.attrib.get("cy"), 0)
         r = num(elem.attrib.get("r"), 0)
-        return [("o", cx, cy, r)]
+        fill = get_paint_attr(elem, "fill")
+        stroke = get_paint_attr(elem, "stroke")
+
+        if fill is None and stroke is None:
+            if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
+                pcx, pcy = apply_matrix_point(transform, cx, cy)
+                radius = math.hypot(transform[0], transform[1]) * r
+                return [("o", pcx, pcy, radius)]
+            return circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
+
+        cmds: List[Command] = []
+        if fill is not None and fill.lower() != "none":
+            if not (is_identity_matrix(transform) or is_uniform_circle_matrix(transform)):
+                raise NotImplementedError(
+                    "Filled transformed circles are not supported unless the "
+                    "transform preserves a circle."
+                )
+            pcx, pcy = apply_matrix_point(transform, cx, cy)
+            radius = math.hypot(transform[0], transform[1]) * r
+            cmds.append(("f", pcx, pcy, radius))
+        if stroke is not None and stroke.lower() != "none":
+            if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
+                pcx, pcy = apply_matrix_point(transform, cx, cy)
+                radius = math.hypot(transform[0], transform[1]) * r
+                cmds.append(("o", pcx, pcy, radius))
+            else:
+                cmds.extend(
+                    circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
+                )
+        return cmds
 
     if tag == "polyline":
         pts = parse_points(elem.attrib.get("points", ""))
@@ -298,7 +546,7 @@ def element_commands(elem: ET.Element, curve_segments: int) -> List[Command]:
             return []
         cmds: List[Command] = [("m", pts[0][0], pts[0][1])]
         cmds.extend(("l", x, y) for x, y in pts[1:])
-        return cmds
+        return transform_commands(cmds, transform)
 
     if tag == "polygon":
         pts = parse_points(elem.attrib.get("points", ""))
@@ -307,7 +555,7 @@ def element_commands(elem: ET.Element, curve_segments: int) -> List[Command]:
         cmds = [("m", pts[0][0], pts[0][1])]
         cmds.extend(("l", x, y) for x, y in pts[1:])
         cmds.append(("z",))
-        return cmds
+        return transform_commands(cmds, transform)
 
     return []
 
@@ -320,10 +568,24 @@ def convert(svg_file: str, curve_segments: int = 8) -> List[Command]:
     # Default color. User can edit or script color later.
     cmds.append(("c", 12))
 
-    for elem in root.iter():
+    def walk(elem: ET.Element, inherited_transform: Matrix):
+        local_transform = parse_transform(elem.attrib.get("transform"))
+        current_transform = multiply_matrix(inherited_transform, local_transform)
         tag = strip_ns(elem.tag)
+
         if tag in {"path", "rect", "circle", "polyline", "polygon"}:
-            cmds.extend(element_commands(elem, curve_segments=curve_segments))
+            cmds.extend(
+                element_commands(
+                    elem,
+                    curve_segments=curve_segments,
+                    transform=current_transform,
+                )
+            )
+
+        for child in elem:
+            walk(child, current_transform)
+
+    walk(root, identity_matrix())
 
     return cmds
 
