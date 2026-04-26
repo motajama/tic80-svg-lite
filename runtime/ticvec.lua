@@ -8,8 +8,58 @@
 -- {"z"}                     close current path
 -- {"o", cx, cy, r}          circle outline
 -- {"f", cx, cy, r}          filled circle
+-- {"p", x1, y1, ...}        filled polygon
 -- {"r", x, y, w, h}         rectangle outline
 -- {"b", x, y, w, h}         filled rectangle
+
+local function fillpoly(points,col)
+ local n=#points/2
+ if n<3 then return end
+
+ local miny,maxy=points[2],points[2]
+ for i=2,#points,2 do
+  local y=points[i]
+  if y<miny then miny=y end
+  if y>maxy then maxy=y end
+ end
+
+ local ys=math.floor(miny)
+ local ye=math.ceil(maxy)
+
+ for y=ys,ye do
+  local scan=y+0.5
+  local xs={}
+
+  for i=1,n do
+   local j=i+1
+   if j>n then j=1 end
+   local x1=points[i*2-1]
+   local y1=points[i*2]
+   local x2=points[j*2-1]
+   local y2=points[j*2]
+
+   if y1~=y2 then
+    local ymin=y1
+    local ymax=y2
+    if ymin>ymax then
+     ymin,ymax=ymax,ymin
+     x1,x2=x2,x1
+     y1,y2=y2,y1
+    end
+
+    if scan>=ymin and scan<ymax then
+     local t=(scan-y1)/(y2-y1)
+     xs[#xs+1]=x1+t*(x2-x1)
+    end
+   end
+  end
+
+  table.sort(xs)
+  for i=1,#xs-1,2 do
+   line(xs[i],y,xs[i+1],y,col)
+  end
+ end
+end
 
 function drawvec(v,x,y,s)
  s=s or 1
@@ -47,6 +97,14 @@ function drawvec(v,x,y,s)
 
   elseif cmd=="f" then
    circ(x+p[2]*s,y+p[3]*s,p[4]*s,col)
+
+  elseif cmd=="p" then
+   local pts={}
+   for j=2,#p,2 do
+    pts[#pts+1]=x+p[j]*s
+    pts[#pts+1]=y+p[j+1]*s
+   end
+   fillpoly(pts,col)
 
   elseif cmd=="r" then
    rectb(x+p[2]*s,y+p[3]*s,p[4]*s,p[5]*s,col)

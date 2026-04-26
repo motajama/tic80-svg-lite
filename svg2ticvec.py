@@ -80,6 +80,16 @@ def get_paint_attr(elem: ET.Element, name: str) -> Optional[str]:
     return None
 
 
+def has_fill(elem: ET.Element) -> bool:
+    fill = get_paint_attr(elem, "fill")
+    return fill is not None and fill.lower() != "none"
+
+
+def has_stroke(elem: ET.Element) -> bool:
+    stroke = get_paint_attr(elem, "stroke")
+    return stroke is not None and stroke.lower() != "none"
+
+
 def identity_matrix() -> Matrix:
     return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
@@ -231,6 +241,39 @@ def circle_as_path_commands(
     cmds: List[Command] = [("m", points[0][0], points[0][1])]
     cmds.extend(("l", px, py) for px, py in points[1:])
     cmds.append(("z",))
+    return cmds
+
+
+def commands_to_subpaths(cmds: Sequence[Command]) -> List[List[Tuple[float, float]]]:
+    subpaths: List[List[Tuple[float, float]]] = []
+    current: Optional[List[Tuple[float, float]]] = None
+
+    for cmd in cmds:
+        op = cmd[0]
+        if op == "m":
+            current = [(cmd[1], cmd[2])]
+            subpaths.append(current)
+        elif op == "l":
+            if current is None:
+                raise ValueError("Line command without an active subpath")
+            current.append((cmd[1], cmd[2]))
+        elif op == "z":
+            current = None
+        else:
+            raise ValueError(f"Unsupported drawing command in subpath conversion: {op!r}")
+
+    return subpaths
+
+
+def subpaths_to_fill_commands(subpaths: Sequence[Sequence[Tuple[float, float]]]) -> List[Command]:
+    cmds: List[Command] = []
+    for points in subpaths:
+        if len(points) < 3:
+            continue
+        flat: List[float] = []
+        for x, y in points:
+            flat.extend((x, y))
+        cmds.append(tuple(["p", *flat]))
     return cmds
 
 
@@ -455,10 +498,21 @@ def element_commands(
     tag = strip_ns(elem.tag)
 
     if tag == "path":
-        cmds = PathParser(
+        path_cmds = PathParser(
             elem.attrib.get("d", ""), curve_segments=curve_segments
         ).parse()
-        return transform_commands(cmds, transform)
+        path_cmds = transform_commands(path_cmds, transform)
+        fill = has_fill(elem)
+        stroke = has_stroke(elem)
+        if not fill and not stroke:
+            return path_cmds
+
+        cmds: List[Command] = []
+        if fill:
+            cmds.extend(subpaths_to_fill_commands(commands_to_subpaths(path_cmds)))
+        if stroke:
+            cmds.extend(path_cmds)
+        return cmds
 
     if tag == "rect":
         x = num(elem.attrib.get("x"), 0)
@@ -467,17 +521,21 @@ def element_commands(
         h = num(elem.attrib.get("height"), 0)
         rx = num(elem.attrib.get("rx"), 0)
         ry = num(elem.attrib.get("ry"), rx)
-        fill = get_paint_attr(elem, "fill")
-        stroke = get_paint_attr(elem, "stroke")
+        fill = has_fill(elem)
+        stroke = has_stroke(elem)
 
         if rx > 0 or ry > 0:
-            if fill is not None and fill.lower() != "none":
-                raise NotImplementedError(
-                    "Filled rounded rectangles are not supported."
-                )
-            return transform_commands(rect_commands(elem), transform)
+            rect_path = transform_commands(rect_commands(elem), transform)
+            if not fill and not stroke:
+                return rect_path
+            cmds: List[Command] = []
+            if fill:
+                cmds.extend(subpaths_to_fill_commands(commands_to_subpaths(rect_path)))
+            if stroke:
+                cmds.extend(rect_path)
+            return cmds
 
-        if fill is None and stroke is None:
+        if not fill and not stroke:
             if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
                 x0, y0 = apply_matrix_point(transform, x, y)
                 x1, y1 = apply_matrix_point(transform, x + w, y + h)
@@ -485,16 +543,18 @@ def element_commands(
             return rect_as_path_commands(x, y, w, h, transform)
 
         cmds: List[Command] = []
-        if fill is not None and fill.lower() != "none":
-            if not (is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform)):
-                raise NotImplementedError(
-                    "Filled transformed rectangles are not supported unless the "
-                    "transform preserves axis alignment."
+        if fill:
+            if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
+                x0, y0 = apply_matrix_point(transform, x, y)
+                x1, y1 = apply_matrix_point(transform, x + w, y + h)
+                cmds.append(("b", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
+            else:
+                cmds.extend(
+                    subpaths_to_fill_commands(
+                        commands_to_subpaths(rect_as_path_commands(x, y, w, h, transform))
+                    )
                 )
-            x0, y0 = apply_matrix_point(transform, x, y)
-            x1, y1 = apply_matrix_point(transform, x + w, y + h)
-            cmds.append(("b", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
-        if stroke is not None and stroke.lower() != "none":
+        if stroke:
             if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
                 x0, y0 = apply_matrix_point(transform, x, y)
                 x1, y1 = apply_matrix_point(transform, x + w, y + h)
@@ -509,10 +569,10 @@ def element_commands(
         cx = num(elem.attrib.get("cx"), 0)
         cy = num(elem.attrib.get("cy"), 0)
         r = num(elem.attrib.get("r"), 0)
-        fill = get_paint_attr(elem, "fill")
-        stroke = get_paint_attr(elem, "stroke")
+        fill = has_fill(elem)
+        stroke = has_stroke(elem)
 
-        if fill is None and stroke is None:
+        if not fill and not stroke:
             if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
                 pcx, pcy = apply_matrix_point(transform, cx, cy)
                 radius = math.hypot(transform[0], transform[1]) * r
@@ -520,16 +580,20 @@ def element_commands(
             return circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
 
         cmds: List[Command] = []
-        if fill is not None and fill.lower() != "none":
-            if not (is_identity_matrix(transform) or is_uniform_circle_matrix(transform)):
-                raise NotImplementedError(
-                    "Filled transformed circles are not supported unless the "
-                    "transform preserves a circle."
+        if fill:
+            if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
+                pcx, pcy = apply_matrix_point(transform, cx, cy)
+                radius = math.hypot(transform[0], transform[1]) * r
+                cmds.append(("f", pcx, pcy, radius))
+            else:
+                cmds.extend(
+                    subpaths_to_fill_commands(
+                        commands_to_subpaths(
+                            circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
+                        )
+                    )
                 )
-            pcx, pcy = apply_matrix_point(transform, cx, cy)
-            radius = math.hypot(transform[0], transform[1]) * r
-            cmds.append(("f", pcx, pcy, radius))
-        if stroke is not None and stroke.lower() != "none":
+        if stroke:
             if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
                 pcx, pcy = apply_matrix_point(transform, cx, cy)
                 radius = math.hypot(transform[0], transform[1]) * r
@@ -546,7 +610,10 @@ def element_commands(
             return []
         cmds: List[Command] = [("m", pts[0][0], pts[0][1])]
         cmds.extend(("l", x, y) for x, y in pts[1:])
-        return transform_commands(cmds, transform)
+        cmds = transform_commands(cmds, transform)
+        if has_fill(elem):
+            raise NotImplementedError("Filled polylines are not supported.")
+        return cmds if not has_stroke(elem) else cmds
 
     if tag == "polygon":
         pts = parse_points(elem.attrib.get("points", ""))
@@ -555,7 +622,17 @@ def element_commands(
         cmds = [("m", pts[0][0], pts[0][1])]
         cmds.extend(("l", x, y) for x, y in pts[1:])
         cmds.append(("z",))
-        return transform_commands(cmds, transform)
+        cmds = transform_commands(cmds, transform)
+        fill = has_fill(elem)
+        stroke = has_stroke(elem)
+        if not fill and not stroke:
+            return cmds
+        out: List[Command] = []
+        if fill:
+            out.extend(subpaths_to_fill_commands(commands_to_subpaths(cmds)))
+        if stroke:
+            out.extend(cmds)
+        return out
 
     return []
 

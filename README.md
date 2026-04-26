@@ -10,7 +10,7 @@ SVG file → svg2ticvec.py → Lua table → drawvec() in TIC-80
 
 ## Why?
 
-TIC-80 is small and fast. Parsing real SVG at runtime is too heavy and unnecessary for most fantasy-console game assets. This project converts a safe SVG subset into a compact Lua table that TIC-80 can draw using built-in primitives such as `line`, `rectb`, and `circb`.
+TIC-80 is small and fast. Parsing real SVG at runtime is too heavy and unnecessary for most fantasy-console game assets. This project converts a safe SVG subset into a compact Lua table that TIC-80 can draw using built-in primitives such as `line`, `rectb`, `circb`, and a tiny scanline polygon filler.
 
 ## Supported SVG subset
 
@@ -35,14 +35,22 @@ TIC-80 is small and fast. Parsing real SVG at runtime is too heavy and unnecessa
 ### Not supported
 
 - SVG arcs `A/a`
-- transforms
 - gradients
 - text
 - filters
 - masks
 - clipping
 - external CSS
-- faithful fill/stroke semantics
+- full SVG fill rules, holes, and compound-path semantics
+
+### Supported transforms
+
+- `translate(...)`
+- `scale(...)`
+- `rotate(...)`
+- `skewX(...)`
+- `skewY(...)`
+- `matrix(...)`
 
 For best results, prepare SVGs in Inkscape as simple outlines and paths.
 
@@ -111,6 +119,7 @@ Commands:
 | `{"z"}` | Close current path |
 | `{"o", cx, cy, r}` | Circle outline |
 | `{"f", cx, cy, r}` | Filled circle |
+| `{"p", x1, y1, x2, y2, ...}` | Filled polygon |
 | `{"r", x, y, w, h}` | Rectangle outline |
 | `{"b", x, y, w, h}` | Filled rectangle |
 
@@ -144,9 +153,11 @@ Then paste:
 
 This is deliberately small. It is meant to be hackable and understandable.
 
-The converter currently ignores SVG styles. It starts every output with TIC-80 color `12`. You can edit generated Lua manually or add your own color logic.
+The converter currently starts every output with TIC-80 color `12`. It can read simple inline `fill`, `stroke`, and `style="fill:...;stroke:..."` hints for basic fill/outline decisions, but it does not preserve original SVG colors.
 
 Rounded rectangles are approximated with line segments.
+
+Filled paths and polygons are filled as simple polygons. Complex compound paths and holes are not handled with full SVG correctness.
 
 ## License
 

@@ -13,6 +13,17 @@ class Svg2TicVecTests(unittest.TestCase):
         self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
         return tmp.name
 
+    def assert_commands_almost_equal(self, actual, expected, places=7):
+        self.assertEqual(len(actual), len(expected))
+        for actual_cmd, expected_cmd in zip(actual, expected):
+            self.assertEqual(actual_cmd[0], expected_cmd[0])
+            self.assertEqual(len(actual_cmd), len(expected_cmd))
+            for actual_value, expected_value in zip(actual_cmd[1:], expected_cmd[1:]):
+                if isinstance(expected_value, float):
+                    self.assertAlmostEqual(actual_value, expected_value, places=places)
+                else:
+                    self.assertEqual(actual_value, expected_value)
+
     def test_house_example_conversion(self):
         cmds = svg2ticvec.convert("examples/house.svg")
         self.assertEqual(
@@ -96,6 +107,59 @@ class Svg2TicVecTests(unittest.TestCase):
                 ("c", 12),
                 ("b", 1.0, 2.0, 3.0, 4.0),
                 ("o", 8.0, 9.0, 2.0),
+            ],
+        )
+
+    def test_polygon_fill_emits_filled_polygon_command(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <polygon points="1,1 5,1 3,4" fill="#fff" stroke="none" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("p", 1.0, 1.0, 5.0, 1.0, 3.0, 4.0),
+            ],
+        )
+
+    def test_filled_path_with_stroke_emits_fill_then_outline(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <path d="M 1 1 L 5 1 L 3 4 Z" fill="#fff" stroke="#000" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("p", 1.0, 1.0, 5.0, 1.0, 3.0, 4.0),
+                ("m", 1.0, 1.0),
+                ("l", 5.0, 1.0),
+                ("l", 3.0, 4.0),
+                ("z",),
+            ],
+        )
+
+    def test_filled_transformed_rect_falls_back_to_polygon_fill(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <rect x="0" y="0" width="2" height="1" fill="#fff"
+                    transform="rotate(90)" />
+            </svg>
+            """
+        )
+        self.assert_commands_almost_equal(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("p", 0.0, 0.0, 0.0, 2.0, -1.0, 2.0, -1.0, 0.0),
             ],
         )
 
