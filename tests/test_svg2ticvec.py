@@ -163,6 +163,34 @@ class Svg2TicVecTests(unittest.TestCase):
             ],
         )
 
+    def test_reused_inkscape_labels_emit_symbolic_color_roles(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg"
+                 xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+              <rect x="1" y="2" width="3" height="4" inkscape:label="roof" fill="#fff" />
+              <circle cx="8" cy="9" r="2" inkscape:label="roof" fill="#fff" />
+              <rect x="10" y="1" width="2" height="2" fill="#fff" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("c", "roof"),
+                ("b", 1.0, 2.0, 3.0, 4.0),
+                ("f", 8.0, 9.0, 2.0),
+                ("c", 12),
+                ("b", 10.0, 1.0, 2.0, 2.0),
+            ],
+        )
+
+    def test_to_lua_quotes_symbolic_color_roles(self):
+        lua = svg2ticvec.to_lua([("c", "roof"), ("b", 1.0, 2.0, 3.0, 4.0)], "icon")
+        self.assertIn('{"c", "roof"}', lua)
+        self.assertIn('{"b", 1, 2, 3, 4}', lua)
+
 
 if __name__ == "__main__":
     unittest.main()

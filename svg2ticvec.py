@@ -27,11 +27,12 @@ import math
 import re
 import sys
 import xml.etree.ElementTree as ET
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Union
 
 
 Command = Tuple
 Matrix = Tuple[float, float, float, float, float, float]
+ColorRef = Union[int, str]
 
 
 TOKEN_RE = re.compile(
@@ -77,6 +78,13 @@ def get_paint_attr(elem: ET.Element, name: str) -> Optional[str]:
     style = elem.attrib.get("style")
     if style:
         return parse_style_attr(style).get(name)
+    return None
+
+
+def get_color_role(elem: ET.Element) -> Optional[str]:
+    for key, value in elem.attrib.items():
+        if key == "{http://www.inkscape.org/namespaces/inkscape}label" and value:
+            return value.strip() or None
     return None
 
 
@@ -641,22 +649,29 @@ def convert(svg_file: str, curve_segments: int = 8) -> List[Command]:
     tree = ET.parse(svg_file)
     root = tree.getroot()
     cmds: List[Command] = []
+    current_color: ColorRef = 12
 
     # Default color. User can edit or script color later.
     cmds.append(("c", 12))
 
     def walk(elem: ET.Element, inherited_transform: Matrix):
+        nonlocal current_color
         local_transform = parse_transform(elem.attrib.get("transform"))
         current_transform = multiply_matrix(inherited_transform, local_transform)
         tag = strip_ns(elem.tag)
 
         if tag in {"path", "rect", "circle", "polyline", "polygon"}:
+            target_color: ColorRef = get_color_role(elem) or 12
+            element_cmds = element_commands(
+                elem,
+                curve_segments=curve_segments,
+                transform=current_transform,
+            )
+            if element_cmds and target_color != current_color:
+                cmds.append(("c", target_color))
+                current_color = target_color
             cmds.extend(
-                element_commands(
-                    elem,
-                    curve_segments=curve_segments,
-                    transform=current_transform,
-                )
+                element_cmds
             )
 
         for child in elem:
@@ -668,17 +683,22 @@ def convert(svg_file: str, curve_segments: int = 8) -> List[Command]:
 
 
 def to_lua(cmds: Sequence[Command], name: str, decimals: int = 2, compact: bool = False) -> str:
+    def format_arg(value) -> str:
+        if isinstance(value, str):
+            return f'"{value}"'
+        return fmt_number(float(value), decimals)
+
     if compact:
         lines = [f"{name}={{"]
         for cmd in cmds:
-            args = [f'"{cmd[0]}"'] + [fmt_number(float(v), decimals) for v in cmd[1:]]
+            args = [f'"{cmd[0]}"'] + [format_arg(v) for v in cmd[1:]]
             lines.append("{" + ",".join(args) + "},")
         lines.append("}")
         return "\n".join(lines)
 
     lines = [f"{name} = {{"]
     for cmd in cmds:
-        args = [f'"{cmd[0]}"'] + [fmt_number(float(v), decimals) for v in cmd[1:]]
+        args = [f'"{cmd[0]}"'] + [format_arg(v) for v in cmd[1:]]
         lines.append("  {" + ", ".join(args) + "},")
     lines.append("}")
     return "\n".join(lines)
