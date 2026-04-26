@@ -6,3 +6,6 @@ test.lua
 __pycache__/
 *.pyc
 *.lua
+!runtime/
+!runtime/*.lua
+!examples/demo.lua
