@@ -30,12 +30,23 @@ class Svg2TicVecTests(unittest.TestCase):
             cmds,
             [
                 ("c", 12),
+                ("c", "roof"),
+                ("p", 2.0, 12.0, 12.0, 3.0, 22.0, 12.0),
+                ("w", 1.5),
                 ("m", 2.0, 12.0),
                 ("l", 12.0, 3.0),
                 ("l", 22.0, 12.0),
                 ("z",),
+                ("w", 1.0),
+                ("c", "wall"),
+                ("b", 5.0, 12.0, 14.0, 9.0),
+                ("w", 1.5),
                 ("r", 5.0, 12.0, 14.0, 9.0),
-                ("r", 10.0, 15.0, 4.0, 6.0),
+                ("w", 1.0),
+                ("c", "door"),
+                ("b", 10.0, 15.0, 4.0, 6.0),
+                ("c", "window"),
+                ("f", 17.0, 16.0, 1.0),
                 ("o", 17.0, 16.0, 1.0),
             ],
         )
@@ -190,6 +201,67 @@ class Svg2TicVecTests(unittest.TestCase):
         lua = svg2ticvec.to_lua([("c", "roof"), ("b", 1.0, 2.0, 3.0, 4.0)], "icon")
         self.assertIn('{"c", "roof"}', lua)
         self.assertIn('{"b", 1, 2, 3, 4}', lua)
+
+    def test_stroke_width_is_emitted_for_paths(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <path d="M 1 1 L 5 1" stroke="#000" stroke-width="3" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("w", 3.0),
+                ("m", 1.0, 1.0),
+                ("l", 5.0, 1.0),
+                ("w", 1.0),
+            ],
+        )
+
+    def test_stroke_width_from_style_is_emitted_for_rect_outline(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="2" width="3" height="4"
+                    style="stroke:#000;stroke-width:2.5;fill:none" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("w", 2.5),
+                ("r", 1.0, 2.0, 3.0, 4.0),
+                ("w", 1.0),
+            ],
+        )
+
+    def test_fill_and_stroke_width_emit_both_fill_and_stroked_outline(self):
+        path = self.write_svg(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <polygon points="1,1 5,1 3,4"
+                       fill="#fff" stroke="#000" stroke-width="4" />
+            </svg>
+            """
+        )
+        self.assertEqual(
+            svg2ticvec.convert(path),
+            [
+                ("c", 12),
+                ("p", 1.0, 1.0, 5.0, 1.0, 3.0, 4.0),
+                ("w", 4.0),
+                ("m", 1.0, 1.0),
+                ("l", 5.0, 1.0),
+                ("l", 3.0, 4.0),
+                ("z",),
+                ("w", 1.0),
+            ],
+        )
 
 
 if __name__ == "__main__":

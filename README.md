@@ -1,58 +1,26 @@
 # TIC-80 SVG Lite
 
-A tiny SVG-like vector pipeline for [TIC-80](https://tic80.com/) Lua games.
+A tiny SVG-to-Lua vector pipeline for [TIC-80](https://tic80.com/) games.
 
-It is **not** a full SVG renderer. It is a small converter + runtime intended for icons, line art, UI symbols, simple map signs, and small vector illustrations.
+It is not a full SVG renderer. It is a small offline converter plus a tiny TIC-80 runtime for icons, line art, UI symbols, signs, and simple vector illustrations.
 
 ```text
-SVG file → svg2ticvec.py → Lua table → drawvec() in TIC-80
+SVG file -> svg2ticvec.py -> Lua command table -> drawvec() in TIC-80
 ```
 
-## Why?
+## What It Does
 
-TIC-80 is small and fast. Parsing real SVG at runtime is too heavy and unnecessary for most fantasy-console game assets. This project converts a safe SVG subset into a compact Lua table that TIC-80 can draw using built-in primitives such as `line`, `rectb`, `circb`, and a tiny scanline polygon filler.
+- Converts a safe SVG subset into Lua tables
+- Draws fills, outlines, circles, rectangles, and flattened curves in TIC-80
+- Supports basic SVG transforms during conversion
+- Supports fill and stroke presence
+- Supports stroke width
+- Supports label-driven palette roles via `inkscape:label`
 
-## Supported SVG subset
+## Authorship
 
-### Elements
-
-- `path`
-- `rect`
-- `circle`
-- `polyline`
-- `polygon`
-
-### Path commands
-
-- `M`, `m` — move to
-- `L`, `l` — line to
-- `H`, `h` — horizontal line
-- `V`, `v` — vertical line
-- `C`, `c` — cubic Bézier, approximated as lines
-- `Q`, `q` — quadratic Bézier, approximated as lines
-- `Z`, `z` — close path
-
-### Not supported
-
-- SVG arcs `A/a`
-- gradients
-- text
-- filters
-- masks
-- clipping
-- external CSS
-- full SVG fill rules, holes, and compound-path semantics
-
-### Supported transforms
-
-- `translate(...)`
-- `scale(...)`
-- `rotate(...)`
-- `skewX(...)`
-- `skewY(...)`
-- `matrix(...)`
-
-For best results, prepare SVGs in Inkscape as simple outlines and paths.
+- Design, concept, and debugging: motajama
+- Implementation and coding assistance in this iteration: OpenAI Codex
 
 ## Install
 
@@ -64,48 +32,70 @@ chmod +x svg2ticvec.py
 
 ## Usage
 
+Basic conversion:
+
 ```bash
 python3 svg2ticvec.py examples/house.svg -o examples/house.lua -n icon_house
 ```
 
-For smaller output:
+Compact output:
 
 ```bash
 python3 svg2ticvec.py examples/house.svg -o examples/house.lua -n icon_house --compact
 ```
 
-For smoother curves:
+Smoother curves:
 
 ```bash
 python3 svg2ticvec.py examples/curve.svg -o examples/curve.lua -n icon_curve --curve-segments 16
 ```
 
-Default curve quality is 8 line segments per Bézier command.
+Default curve quality is `8` line segments per Bezier command.
 
-## TIC-80 usage
+## TIC-80 Usage
 
-Paste `runtime/ticvec.lua` into your TIC-80 cartridge, then paste the generated Lua table.
+Paste [runtime/ticvec.lua](/home/motajama/Code/TIC-80/tic80-svg-lite/runtime/ticvec.lua:1) into your cartridge, then paste the generated Lua table.
+
+Basic draw:
 
 ```lua
 drawvec(icon_house, 40, 40, 2)
 ```
 
+Draw with palette-role mapping:
+
+```lua
+drawvec(icon_house, 40, 40, 2, {
+ roof = 6,
+ wall = 12,
+ door = 3,
+})
+```
+
 Arguments:
 
 ```lua
-drawvec(vector_table, x, y, scale)
+drawvec(vector_table, x, y, scale, palette_map)
 ```
 
-## Generated command format
+- `vector_table`: generated command table
+- `x`, `y`: draw offset
+- `scale`: optional, defaults to `1`
+- `palette_map`: optional table used when `{"c", "role_name"}` appears in the vector data
+
+## Generated Command Format
+
+Example:
 
 ```lua
 icon_house = {
-  {"c", 12},
-  {"m", 2, 12},
-  {"l", 12, 3},
-  {"l", 22, 12},
-  {"z"},
+  {"c", "roof"},
+  {"p", 2, 12, 12, 3, 22, 12},
+  {"c", "wall"},
+  {"b", 5, 12, 14, 9},
+  {"w", 2},
   {"r", 5, 12, 14, 9},
+  {"w", 1},
 }
 ```
 
@@ -113,7 +103,8 @@ Commands:
 
 | Command | Meaning |
 |---|---|
-| `{"c", color}` | Set TIC-80 color |
+| `{"c", color_or_role}` | Set TIC-80 color or palette role |
+| `{"w", width}` | Set stroke width for outline commands |
 | `{"m", x, y}` | Move drawing cursor |
 | `{"l", x, y}` | Draw line |
 | `{"z"}` | Close current path |
@@ -123,17 +114,73 @@ Commands:
 | `{"r", x, y, w, h}` | Rectangle outline |
 | `{"b", x, y, w, h}` | Filled rectangle |
 
-## Recommended Inkscape workflow
+Notes:
 
-1. Use a small canvas, for example `32×32`, `64×64`, or TIC-80-friendly proportions.
-2. Avoid gradients, text, opacity, filters, masks, and clipping.
-3. Convert objects to paths where needed:
-   - `Path → Object to Path`
-4. Simplify complex paths:
-   - `Path → Simplify`
-5. Avoid arcs or convert them to cubic paths.
-6. Save as **Plain SVG**.
-7. Convert with `svg2ticvec.py`.
+- `{"w", ...}` affects later outline commands until another width command changes it.
+- The converter resets stroke width back to `1` after each stroked element.
+- `{"c", ...}` accepts either a numeric TIC-80 palette index or a string role such as `"roof"`.
+
+## Supported SVG Subset
+
+Elements:
+
+- `path`
+- `rect`
+- `circle`
+- `polyline`
+- `polygon`
+
+Path commands:
+
+- `M`, `m`
+- `L`, `l`
+- `H`, `h`
+- `V`, `v`
+- `C`, `c`
+- `Q`, `q`
+- `Z`, `z`
+
+Bezier curves are approximated as lines.
+
+Supported transforms:
+
+- `translate(...)`
+- `scale(...)`
+- `rotate(...)`
+- `skewX(...)`
+- `skewY(...)`
+- `matrix(...)`
+
+Supported style handling:
+
+- `fill`
+- `stroke`
+- `stroke-width`
+- simple inline `style="fill:...;stroke:...;stroke-width:..."`
+- `inkscape:label` as a logical palette role name
+
+## Palette Roles Via Inkscape Labels
+
+If a shape has an Inkscape object label such as `roof`, the converter emits that label as the active color role:
+
+```lua
+{"c", "roof"}
+```
+
+At draw time, the game provides the actual TIC-80 palette index:
+
+```lua
+drawvec(icon, x, y, 1, {
+ roof = 6,
+ wall = 12,
+})
+```
+
+Rules:
+
+- Reusing the same Inkscape label across multiple shapes is supported.
+- Unlabeled shapes fall back to TIC-80 color `12`.
+- Numeric colors still work in the runtime.
 
 ## Examples
 
@@ -149,15 +196,43 @@ Then paste:
 2. generated `examples/*.lua`
 3. `examples/demo.lua`
 
+## Inkscape Workflow
+
+See [INKSCAPE.md](/home/motajama/Code/TIC-80/tic80-svg-lite/INKSCAPE.md:1) for the detailed authoring guide.
+
+Short version:
+
+1. Use a small canvas such as `32x32` or `64x64`.
+2. Prefer separate shapes for separate fill/stroke/color-role parts.
+3. Give reusable color-role labels in Inkscape, such as `roof`, `wall`, `outline`.
+4. Convert text and advanced objects to paths when needed.
+5. Save as Plain SVG.
+
 ## Limitations
 
-This is deliberately small. It is meant to be hackable and understandable.
+This project is deliberately small and pragmatic.
 
-The converter currently starts every output with TIC-80 color `12`. It can read simple inline `fill`, `stroke`, and `style="fill:...;stroke:..."` hints for basic fill/outline decisions, but it does not preserve original SVG colors.
+Not supported:
 
-Rounded rectangles are approximated with line segments.
+- SVG arcs `A/a`
+- text
+- gradients
+- filters
+- masks
+- clipping
+- external CSS
+- dashed strokes
+- full SVG stroke join/cap semantics
+- full SVG fill rules, holes, and compound-path semantics
 
-Filled paths and polygons are filled as simple polygons. Complex compound paths and holes are not handled with full SVG correctness.
+Behavioral approximations:
+
+- Curves are flattened to line segments.
+- Rounded rectangles are approximated with lines.
+- Thick line rendering is approximate in TIC-80.
+- Thick circle outlines are approximated with stacked outlines.
+- Filled paths and polygons are treated as simple polygons/subpaths.
+- Original SVG RGB colors are not preserved directly; Inkscape labels are the intended palette-control mechanism.
 
 ## License
 

@@ -98,6 +98,13 @@ def has_stroke(elem: ET.Element) -> bool:
     return stroke is not None and stroke.lower() != "none"
 
 
+def get_stroke_width(elem: ET.Element) -> float:
+    value = get_paint_attr(elem, "stroke-width")
+    if value is None:
+        return 1.0
+    return max(1.0, num(value, 1.0))
+
+
 def identity_matrix() -> Matrix:
     return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
@@ -283,6 +290,14 @@ def subpaths_to_fill_commands(subpaths: Sequence[Sequence[Tuple[float, float]]])
             flat.extend((x, y))
         cmds.append(tuple(["p", *flat]))
     return cmds
+
+
+def with_stroke_width(cmds: Sequence[Command], stroke_width: float) -> List[Command]:
+    if not cmds:
+        return []
+    if abs(stroke_width - 1.0) < 1e-9:
+        return list(cmds)
+    return [("w", stroke_width), *cmds, ("w", 1.0)]
 
 
 def parse_points(points: str) -> List[Tuple[float, float]]:
@@ -512,14 +527,15 @@ def element_commands(
         path_cmds = transform_commands(path_cmds, transform)
         fill = has_fill(elem)
         stroke = has_stroke(elem)
+        stroke_width = get_stroke_width(elem)
         if not fill and not stroke:
-            return path_cmds
+            return with_stroke_width(path_cmds, stroke_width)
 
         cmds: List[Command] = []
         if fill:
             cmds.extend(subpaths_to_fill_commands(commands_to_subpaths(path_cmds)))
         if stroke:
-            cmds.extend(path_cmds)
+            cmds.extend(with_stroke_width(path_cmds, stroke_width))
         return cmds
 
     if tag == "rect":
@@ -531,24 +547,26 @@ def element_commands(
         ry = num(elem.attrib.get("ry"), rx)
         fill = has_fill(elem)
         stroke = has_stroke(elem)
+        stroke_width = get_stroke_width(elem)
 
         if rx > 0 or ry > 0:
             rect_path = transform_commands(rect_commands(elem), transform)
             if not fill and not stroke:
-                return rect_path
+                return with_stroke_width(rect_path, stroke_width)
             cmds: List[Command] = []
             if fill:
                 cmds.extend(subpaths_to_fill_commands(commands_to_subpaths(rect_path)))
             if stroke:
-                cmds.extend(rect_path)
+                cmds.extend(with_stroke_width(rect_path, stroke_width))
             return cmds
 
         if not fill and not stroke:
             if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
                 x0, y0 = apply_matrix_point(transform, x, y)
                 x1, y1 = apply_matrix_point(transform, x + w, y + h)
-                return [("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))]
-            return rect_as_path_commands(x, y, w, h, transform)
+                rect_cmds = [("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))]
+                return with_stroke_width(rect_cmds, stroke_width)
+            return with_stroke_width(rect_as_path_commands(x, y, w, h, transform), stroke_width)
 
         cmds: List[Command] = []
         if fill:
@@ -566,11 +584,15 @@ def element_commands(
             if is_identity_matrix(transform) or is_axis_aligned_rect_matrix(transform):
                 x0, y0 = apply_matrix_point(transform, x, y)
                 x1, y1 = apply_matrix_point(transform, x + w, y + h)
-                cmds.append(
-                    ("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+                cmds.extend(with_stroke_width(
+                    [("r", min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))],
+                    stroke_width,
+                )
                 )
             else:
-                cmds.extend(rect_as_path_commands(x, y, w, h, transform))
+                cmds.extend(
+                    with_stroke_width(rect_as_path_commands(x, y, w, h, transform), stroke_width)
+                )
         return cmds
 
     if tag == "circle":
@@ -579,13 +601,17 @@ def element_commands(
         r = num(elem.attrib.get("r"), 0)
         fill = has_fill(elem)
         stroke = has_stroke(elem)
+        stroke_width = get_stroke_width(elem)
 
         if not fill and not stroke:
             if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
                 pcx, pcy = apply_matrix_point(transform, cx, cy)
                 radius = math.hypot(transform[0], transform[1]) * r
-                return [("o", pcx, pcy, radius)]
-            return circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
+                return with_stroke_width([("o", pcx, pcy, radius)], stroke_width)
+            return with_stroke_width(
+                circle_as_path_commands(cx, cy, r, transform, curve_segments * 4),
+                stroke_width,
+            )
 
         cmds: List[Command] = []
         if fill:
@@ -605,10 +631,13 @@ def element_commands(
             if is_identity_matrix(transform) or is_uniform_circle_matrix(transform):
                 pcx, pcy = apply_matrix_point(transform, cx, cy)
                 radius = math.hypot(transform[0], transform[1]) * r
-                cmds.append(("o", pcx, pcy, radius))
+                cmds.extend(with_stroke_width([("o", pcx, pcy, radius)], stroke_width))
             else:
                 cmds.extend(
-                    circle_as_path_commands(cx, cy, r, transform, curve_segments * 4)
+                    with_stroke_width(
+                        circle_as_path_commands(cx, cy, r, transform, curve_segments * 4),
+                        stroke_width,
+                    )
                 )
         return cmds
 
@@ -621,7 +650,7 @@ def element_commands(
         cmds = transform_commands(cmds, transform)
         if has_fill(elem):
             raise NotImplementedError("Filled polylines are not supported.")
-        return cmds if not has_stroke(elem) else cmds
+        return with_stroke_width(cmds, get_stroke_width(elem))
 
     if tag == "polygon":
         pts = parse_points(elem.attrib.get("points", ""))
@@ -633,13 +662,14 @@ def element_commands(
         cmds = transform_commands(cmds, transform)
         fill = has_fill(elem)
         stroke = has_stroke(elem)
+        stroke_width = get_stroke_width(elem)
         if not fill and not stroke:
-            return cmds
+            return with_stroke_width(cmds, stroke_width)
         out: List[Command] = []
         if fill:
             out.extend(subpaths_to_fill_commands(commands_to_subpaths(cmds)))
         if stroke:
-            out.extend(cmds)
+            out.extend(with_stroke_width(cmds, stroke_width))
         return out
 
     return []

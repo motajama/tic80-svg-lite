@@ -3,6 +3,7 @@
 --
 -- Commands:
 -- {"c", color_or_role}      set TIC-80 color or palette role
+-- {"w", width}              set stroke width for outline commands
 -- {"m", x, y}               move cursor
 -- {"l", x, y}               line to
 -- {"z"}                     close current path
@@ -61,12 +62,66 @@ local function fillpoly(points,col)
  end
 end
 
+local function drawthickline(x1,y1,x2,y2,w,col)
+ if w<=1 then
+  line(x1,y1,x2,y2,col)
+  return
+ end
+
+ local dx=x2-x1
+ local dy=y2-y1
+ local len=math.sqrt(dx*dx+dy*dy)
+ if len<0.0001 then
+  circ(x1,y1,w/2,col)
+  return
+ end
+
+ local hw=w/2
+ local nx=-dy/len*hw
+ local ny=dx/len*hw
+ fillpoly({
+  x1+nx,y1+ny,
+  x2+nx,y2+ny,
+  x2-nx,y2-ny,
+  x1-nx,y1-ny,
+ },col)
+ circ(x1,y1,hw,col)
+ circ(x2,y2,hw,col)
+end
+
+local function drawrectstroke(x,y,w,h,sw,col)
+ if sw<=1 then
+  rectb(x,y,w,h,col)
+  return
+ end
+
+ rect(x-sw/2,y-sw/2,w+sw,sw,col)
+ rect(x-sw/2,y+h-sw/2,w+sw,sw,col)
+ rect(x-sw/2,y+sw/2,sw,h-sw,col)
+ rect(x+w-sw/2,y+sw/2,sw,h-sw,col)
+end
+
+local function drawcirclestroke(x,y,r,sw,col)
+ if sw<=1 then
+  circb(x,y,r,col)
+  return
+ end
+
+ local half=sw/2
+ local r0=math.max(0,math.floor(r-half))
+ local r1=math.max(r0,math.ceil(r+half))
+ for rr=r0,r1 do
+  circb(x,y,rr,col)
+ end
+end
+
 function drawvec(v,x,y,s,pal)
  s=s or 1
  pal=pal or {}
  local cx,cy=0,0
  local sx,sy=0,0
  local col=12
+ local sw=1
 
  for i=1,#v do
   local p=v[i]
@@ -79,6 +134,10 @@ function drawvec(v,x,y,s,pal)
     col=pal[p[2]] or 12
    end
 
+  elseif cmd=="w" then
+   sw=p[2]
+   if sw<1 then sw=1 end
+
   elseif cmd=="m" then
    cx=x+p[2]*s
    cy=y+p[3]*s
@@ -88,17 +147,17 @@ function drawvec(v,x,y,s,pal)
   elseif cmd=="l" then
    local nx=x+p[2]*s
    local ny=y+p[3]*s
-   line(cx,cy,nx,ny,col)
+   drawthickline(cx,cy,nx,ny,sw*s,col)
    cx=nx
    cy=ny
 
   elseif cmd=="z" then
-   line(cx,cy,sx,sy,col)
+   drawthickline(cx,cy,sx,sy,sw*s,col)
    cx=sx
    cy=sy
 
   elseif cmd=="o" then
-   circb(x+p[2]*s,y+p[3]*s,p[4]*s,col)
+   drawcirclestroke(x+p[2]*s,y+p[3]*s,p[4]*s,sw*s,col)
 
   elseif cmd=="f" then
    circ(x+p[2]*s,y+p[3]*s,p[4]*s,col)
@@ -112,7 +171,7 @@ function drawvec(v,x,y,s,pal)
    fillpoly(pts,col)
 
   elseif cmd=="r" then
-   rectb(x+p[2]*s,y+p[3]*s,p[4]*s,p[5]*s,col)
+   drawrectstroke(x+p[2]*s,y+p[3]*s,p[4]*s,p[5]*s,sw*s,col)
 
   elseif cmd=="b" then
    rect(x+p[2]*s,y+p[3]*s,p[4]*s,p[5]*s,col)
