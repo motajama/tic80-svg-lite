@@ -1,17 +1,17 @@
 # TIC-80 SVG Lite
 
-A tiny SVG-to-Lua vector pipeline for [TIC-80](https://tic80.com/) games.
+A tiny SVG-to-Lua vector pipeline for [TIC-80](https://tic80.com/) and Love2D projects.
 
-It is not a full SVG renderer. It is a small offline converter plus a tiny TIC-80 runtime for icons, line art, UI symbols, signs, and simple vector illustrations.
+It is not a full SVG renderer. It is a small offline converter plus tiny Lua runtimes for icons, line art, UI symbols, signs, and simple vector illustrations.
 
 ```text
-SVG file -> svg2ticvec.py -> Lua command table -> drawvec() in TIC-80
+SVG file -> svg2ticvec.py -> Lua command table -> drawvec() in TIC-80 or Love2D
 ```
 
 ## What It Does
 
 - Converts a safe SVG subset into Lua tables
-- Draws fills, outlines, circles, rectangles, and flattened curves in TIC-80
+- Draws fills, outlines, circles, rectangles, and flattened curves through small Lua runtimes
 - Supports basic SVG transforms during conversion
 - Supports fill and stroke presence
 - Supports stroke width
@@ -83,6 +83,36 @@ drawvec(vector_table, x, y, scale, palette_map)
 - `scale`: optional, defaults to `1`
 - `palette_map`: optional table used when `{"c", "role_name"}` appears in the vector data
 
+## Love2D Usage
+
+Use [`runtime/lovevec.lua`](/home/motajama/Code/TIC-80/tic80-svg-lite/runtime/lovevec.lua:1) and call `drawvec()` from your Love2D app.
+
+The repository includes a minimal demo entry point at [`main.lua`](/home/motajama/Code/TIC-80/tic80-svg-lite/main.lua:1).
+
+Run it from the repo root with:
+
+```bash
+love .
+```
+
+Typical usage:
+
+```lua
+local lovevec = require("runtime.lovevec")
+local icon_house = lovevec.loadvec("examples/house.lua", "icon_house")
+
+local pal = {
+ roof = {0.78, 0.29, 0.22, 1},
+ wall = {0.88, 0.84, 0.72, 1},
+}
+
+lovevec.drawvec(icon_house, 40, 40, 4, pal)
+```
+
+Love2D palette values are RGBA tables in the `0..1` range. Role labels such as `"roof"` work the same way as in TIC-80, but numeric colors are resolved through your palette table rather than a fixed TIC-80 palette.
+
+Generated files can be read directly through `love.filesystem` using `lovevec.loadvec(path, symbol_name)`. This works with the current exporter output format, which defines globals such as `icon_house = {...}`.
+
 ## Generated Command Format
 
 Example:
@@ -103,7 +133,7 @@ Commands:
 
 | Command | Meaning |
 |---|---|
-| `{"c", color_or_role}` | Set TIC-80 color or palette role |
+| `{"c", color_or_role}` | Set color, palette index, or logical color role |
 | `{"w", width}` | Set stroke width for outline commands |
 | `{"m", x, y}` | Move drawing cursor |
 | `{"l", x, y}` | Draw line |
@@ -118,7 +148,7 @@ Notes:
 
 - `{"w", ...}` affects later outline commands until another width command changes it.
 - The converter resets stroke width back to `1` after each stroked element.
-- `{"c", ...}` accepts either a numeric TIC-80 palette index or a string role such as `"roof"`.
+- `{"c", ...}` accepts either a numeric palette value or a string role such as `"roof"`.
 
 ## Supported SVG Subset
 
@@ -167,7 +197,9 @@ If a shape has an Inkscape object label such as `roof`, the converter emits that
 {"c", "roof"}
 ```
 
-At draw time, the game provides the actual TIC-80 palette index:
+At draw time, the game provides the actual runtime color mapping.
+
+In TIC-80:
 
 ```lua
 drawvec(icon, x, y, 1, {
@@ -176,11 +208,20 @@ drawvec(icon, x, y, 1, {
 })
 ```
 
+In Love2D:
+
+```lua
+lovevec.drawvec(icon, x, y, 1, {
+ roof = {0.78, 0.29, 0.22, 1},
+ wall = {0.88, 0.84, 0.72, 1},
+})
+```
+
 Rules:
 
 - Reusing the same Inkscape label across multiple shapes is supported.
-- Unlabeled shapes fall back to TIC-80 color `12`.
-- Numeric colors still work in the runtime.
+- Unlabeled shapes fall back to a runtime default color.
+- Numeric colors still work, but their meaning depends on the runtime.
 
 ## Examples
 
@@ -195,6 +236,12 @@ Then paste:
 1. `runtime/ticvec.lua`
 2. generated `examples/*.lua`
 3. `examples/demo.lua`
+
+For Love2D, use:
+
+1. `runtime/lovevec.lua`
+2. generated `examples/*.lua` or inline generated tables
+3. your own `main.lua` entry point
 
 ## Inkscape Workflow
 
@@ -233,6 +280,7 @@ Behavioral approximations:
 - Thick circle outlines are approximated with stacked outlines.
 - Filled paths and polygons are treated as simple polygons/subpaths.
 - Original SVG RGB colors are not preserved directly; Inkscape labels are the intended palette-control mechanism.
+- The Love2D runtime currently expects explicit RGBA palette mappings for stable colors.
 
 ## License
 

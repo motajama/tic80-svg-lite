@@ -9,3 +9,4 @@ __pycache__/
 !runtime/
 !runtime/*.lua
 !examples/demo.lua
+!main.lua

@@ -1,6 +1,6 @@
 # Preparing SVGs In Inkscape
 
-This guide describes how to prepare artwork in Inkscape so [svg2ticvec.py](/home/motajama/Code/TIC-80/tic80-svg-lite/svg2ticvec.py:1) converts it cleanly for TIC-80.
+This guide describes how to prepare artwork in Inkscape so [svg2ticvec.py](/home/motajama/Code/TIC-80/tic80-svg-lite/svg2ticvec.py:1) converts it cleanly for the Lua runtimes in this repository.
 
 Authorship note:
 
@@ -23,14 +23,14 @@ It is not designed for full SVG artwork with filters, text, gradients, masks, cl
 
 ## Recommended Canvas Setup
 
-Use a small document size that matches the intended TIC-80 asset scale:
+Use a small document size that matches the intended asset scale:
 
 - `16x16`
 - `24x24`
 - `32x32`
 - `64x64`
 
-You can use larger canvases, but keeping the artwork small usually produces cleaner TIC-80 output.
+You can use larger canvases, but keeping the artwork small usually produces cleaner output.
 
 Recommended:
 
@@ -103,7 +103,7 @@ Curves are supported for these path commands:
 
 They are flattened into line segments during conversion.
 
-If a curve looks too angular in TIC-80, increase converter quality:
+If a curve looks too angular in the target runtime, increase converter quality:
 
 ```bash
 python3 svg2ticvec.py art.svg -o art.lua -n icon_art --curve-segments 16
@@ -179,6 +179,15 @@ In TIC-80:
 drawvec(icon_house, 40, 40, 2, {
  roof = 6,
  wall = 12,
+})
+```
+
+In Love2D:
+
+```lua
+lovevec.drawvec(icon_house, 40, 40, 2, {
+ roof = {0.78, 0.29, 0.22, 1},
+ wall = {0.88, 0.84, 0.72, 1},
 })
 ```
 
